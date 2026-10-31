@@ -6,6 +6,8 @@ Ocean's Git-import feature requires a public repository.
 
 This repo contains ONLY the implementation code and tests.
 
+Code Ocean: Control-Plane-Optional Authorization for AI Agents on Industrial MCP Servers: Design, Retrofit, and Measured Evaluation
+
 ## What this is
 
 Local, control-plane-optional authorization for MCP servers deployed in disconnected
