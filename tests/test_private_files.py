@@ -75,8 +75,34 @@ def test_ensure_private_dir_tightens_an_existing_directory(tmp_path):
 def test_ensure_private_dir_rejects_a_regular_file(tmp_path):
     f = tmp_path / "f"
     f.write_text("x")
-    with pytest.raises((CertificateError, FileExistsError)):
+    with pytest.raises(CertificateError):
         ensure_private_dir(f)
+
+
+def test_ensure_private_dir_refuses_a_symlink_and_leaves_the_target_alone(tmp_path):
+    target = tmp_path / "target"
+    target.mkdir()
+    target.chmod(0o755)
+    link = tmp_path / "link"
+    link.symlink_to(target)
+    with pytest.raises(CertificateError):
+        ensure_private_dir(link)
+    assert _mode(target) == 0o755
+
+
+def test_ensure_private_dir_creates_missing_parents_owner_only(tmp_path):
+    ensure_private_dir(tmp_path / "a" / "b" / "c")
+    for name in ("a", "a/b", "a/b/c"):
+        assert _mode(tmp_path / name) == 0o700
+
+
+def test_ensure_private_dir_does_not_touch_existing_parents(tmp_path):
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    parent.chmod(0o755)
+    ensure_private_dir(parent / "child")
+    assert _mode(parent) == 0o755
+    assert _mode(parent / "child") == 0o700
 
 
 def test_save_root_ca_key_and_directory_are_owner_only(tmp_path):
