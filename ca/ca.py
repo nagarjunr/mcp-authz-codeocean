@@ -151,6 +151,15 @@ def generate_root_ca(site_id: str) -> RootCA:
     return RootCA(private_key=private_key, certificate=certificate, site_id=site_id)
 
 
+def _require_posix_hardening() -> None:
+    """Fail closed where owner-only files and symlink-safe directories cannot be enforced."""
+    if not all(hasattr(os, name) for name in ("O_NOFOLLOW", "O_DIRECTORY", "geteuid")):
+        raise CertificateError(
+            "owner-only key storage needs a POSIX platform (O_NOFOLLOW, O_DIRECTORY, geteuid); "
+            "refusing to write key material without those protections"
+        )
+
+
 def write_private_file(path: str | Path, data: bytes) -> None:
     """Write secret material so it is owner-only (0600) from the moment it exists, safely.
 
@@ -160,9 +169,10 @@ def write_private_file(path: str | Path, data: bytes) -> None:
     is replaced rather than followed or truncated, and there is no window in which the key is
     readable by other users or half-written.
     """
+    _require_posix_hardening()
     path = Path(path)
     tmp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
-    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
     fd = os.open(tmp, flags, 0o600)
     try:
         with os.fdopen(fd, "wb") as f:
@@ -185,8 +195,11 @@ def ensure_private_dir(path: str | Path) -> Path:
     directory (a symlink is refused, not followed), owned by the current user; if it is
     accessible to group or others it is tightened to 0700. The checks and the chmod run on an
     open descriptor, so they cannot be raced. Use this only for directories that hold key
-    material.
+    material. Existing ancestors of `path` are not re-validated (symlinked ancestors such as
+    /tmp -> /private/tmp are followed on purpose), so this assumes they are not writable by
+    other users.
     """
+    _require_posix_hardening()
     path = Path(path)
     missing = []
     probe = path
@@ -198,7 +211,7 @@ def ensure_private_dir(path: str | Path) -> Path:
             os.mkdir(d, 0o700)
         except FileExistsError:
             pass
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     try:
         dir_fd = os.open(path, flags)
     except OSError as e:
@@ -207,7 +220,7 @@ def ensure_private_dir(path: str | Path) -> Path:
         st = os.fstat(dir_fd)
         if not stat.S_ISDIR(st.st_mode):
             raise CertificateError(f"{path} is not a directory")
-        if hasattr(os, "geteuid") and st.st_uid != os.geteuid():
+        if st.st_uid != os.geteuid():
             raise CertificateError(f"{path} is not owned by the current user; refusing to store keys there")
         if stat.S_IMODE(st.st_mode) & 0o077:
             os.fchmod(dir_fd, 0o700)
