@@ -32,6 +32,7 @@ Deliberately NOT implemented here (see SCOPE.md "explicitly scoped OUT of v1"):
 from __future__ import annotations
 
 import datetime
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -148,6 +149,18 @@ def generate_root_ca(site_id: str) -> RootCA:
     return RootCA(private_key=private_key, certificate=certificate, site_id=site_id)
 
 
+def write_private_file(path: str | Path, data: bytes) -> None:
+    """Write secret material so it is owner-only (0600) from the moment the file exists.
+
+    Uses os.open with an explicit mode instead of write-then-chmod, so there is no window in
+    which the file is readable by other users. An existing file is tightened to 0600 as well.
+    """
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "wb") as f:
+        os.fchmod(f.fileno(), 0o600)
+        f.write(data)
+
+
 def save_root_ca(ca: RootCA, directory: str | Path) -> None:
     """Persist a root CA's certificate and private key to disk. The private key file is
     written with owner-only permissions (0600) -- this is the stated, honest v1 boundary:
@@ -155,7 +168,7 @@ def save_root_ca(ca: RootCA, directory: str | Path) -> None:
     docstring for why TPM sealing is named as future work rather than implemented here.
     """
     directory = Path(directory)
-    directory.mkdir(parents=True, exist_ok=True)
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
 
     cert_path = directory / "root_ca.crt.pem"
     key_path = directory / "root_ca.key.pem"
@@ -167,8 +180,7 @@ def save_root_ca(ca: RootCA, directory: str | Path) -> None:
         format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.NoEncryption(),
     )
-    key_path.write_bytes(key_bytes)
-    key_path.chmod(0o600)
+    write_private_file(key_path, key_bytes)
 
 
 def load_root_ca(directory: str | Path, site_id: str) -> RootCA:
