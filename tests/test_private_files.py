@@ -113,3 +113,11 @@ def test_save_root_ca_key_and_directory_are_owner_only(tmp_path):
     save_root_ca(ca, d)
     assert _mode(d) == 0o700
     assert _mode(d / "root_ca.key.pem") == 0o600
+
+
+def test_refuses_to_store_keys_without_posix_hardening(monkeypatch, tmp_path):
+    monkeypatch.delattr(os, "O_NOFOLLOW")
+    with pytest.raises(CertificateError):
+        write_private_file(tmp_path / "k.pem", b"x")
+    with pytest.raises(CertificateError):
+        ensure_private_dir(tmp_path / "d")
