@@ -1,0 +1,151 @@
+# Example policy document for a local, control-plane-optional MCP authorization deployment.
+#
+# This file is loaded and cryptographically verified (see policy_engine/policy.py) at
+# server startup. Its SHA-256 hash is logged into every audit-log entry so that any
+# tampering with this file after commissioning is provably visible after the fact, even
+# though filesystem-level modification isn't prevented outright (that's an OS-level
+# access-control concern, explicitly out of scope for this project -- see SCOPE.md).
+#
+# Schema version is pinned so future schema changes don't silently reinterpret an old
+# policy file.
+
+schema_version: 1
+
+# Metadata about this policy's provenance -- helps operators (and the audit log) trace
+# which version of the policy was in effect at a given time.
+metadata:
+  site_id: "plant-7-hydraulic-press-line"
+  issued_by: "local-ca-v1"          # name of the local CA that issued agent certs bound to this policy
+  issued_at: "2026-08-29T00:00:00Z"
+  description: "Initial policy for predictive-maintenance and commissioning agent roles."
+
+# Each role maps to a list of tool-access rules. A rule grants access to one or more
+# tools (by exact name or a glob-style prefix match) under zero or more conditions.
+# The decision function (policy_engine/policy.py:authorize) evaluates rules top-to-bottom
+# for the caller's role and returns the first matching rule's effect. If no rule matches,
+# the default is DENY (fail-closed -- see SCOPE.md "Fail-closed by default").
+roles:
+
+  predictive-maintenance-agent:
+    description: >
+      Read-only monitoring agent. May query digital twin state and MQTT telemetry but
+      must never mutate device state or delete anything.
+    rules:
+      - tools: ["get_thing", "get_things", "list_things", "count_things",
+                "get_thing_attributes", "get_thing_features", "get_feature",
+                "get_feature_properties", "get_feature_definition", "whoami",
+                "get_thing_definition", "get_thing_policy_id", "get_policy",
+                "get_policy_entries", "get_connection", "get_connection_logs",
+                "get_connection_metrics", "list_connections"]
+        effect: ALLOW
+      - tools: ["get_messages", "list_subscriptions", "get_connection_status",
+                "poll_thing_changes", "start_subscription", "stop_subscription",
+                "discover_topics"]
+        effect: ALLOW
+      # Explicit deny rules are redundant with the default-deny fallback, but stated
+      # here for clarity/auditability -- an operator reading this file should not have
+      # to infer that deletes/writes/devops/connection-management/claiming are blocked
+      # from the absence of a rule. This list was built by running this project's own
+      # tool-coverage check (retrofit/ditto_retrofit.py, retrofit/mqtt_retrofit.py)
+      # against the real eclipse-ditto and mqtt servers and adding an explicit rule for
+      # every one of their real tools -- see STRESS_TEST.md 2.3's completeness
+      # requirement.
+      - tools: ["delete_*", "update_*", "put_*", "set_*", "create_*", "patch_thing",
+                "claim_thing", "send_connection_command", "send_devops_piggyback",
+                "get_devops_config", "get_logging_config", "publish_message"]
+        effect: DENY
+        reason: "predictive-maintenance-agent is read-only by design"
+
+  commissioning-agent:
+    description: >
+      Provisions new devices during initial setup. May create things/devices, but only
+      within the "staging:*" namespace, and can never delete anything
+      (deletion requires a separate, more privileged role not defined in this policy).
+    rules:
+      - tools: ["put_thing"]
+        effect: ALLOW
+        conditions:
+          # arg_prefix: require the named argument's value to start with this prefix.
+          # This is the "device-ID/namespace scoping" condition type referenced in
+          # SCOPE.md -- deliberately simple (string-prefix match) for v1; richer
+          # predicate logic is named as future work, not implemented here.
+          #
+          # NOTE: Ditto thing IDs are namespaced ("namespace:name", e.g.
+          # "staging:press-07") -- a bare prefix like "staging-" would never match a
+          # valid Ditto ID and this rule would silently never fire (confirmed the hard
+          # way against a real Ditto instance on the Jetson: PUT rejected with
+          # "Thing ID ... is not valid! It must conform to the namespaced entity ID
+          # notation" for a non-namespaced ID). The prefix here targets the namespace
+          # segment specifically, which is the correct scoping unit for Ditto.
+          #
+          # Note also: eclipse-ditto's real MCP tool for creating a thing is
+          # put_thing(overwrite=False) -- there is no separately-named "create_thing"
+          # tool (an earlier draft of this policy assumed one; corrected after
+          # discovering the mismatch via this project's own tool-coverage check against
+          # the real server).
+          arg_prefix:
+            thing_id: "staging:"
+        require_confirm: false
+      - tools: ["get_thing", "patch_thing"]
+        effect: ALLOW
+        conditions:
+          arg_prefix:
+            thing_id: "staging:"
+      - tools: ["get_things", "list_things", "whoami"]
+        effect: ALLOW
+      - tools: ["delete_*", "claim_thing"]
+        effect: DENY
+        reason: "commissioning-agent may create but never delete or claim"
+      - tools: ["get_thing_attributes", "get_thing_features", "get_feature",
+                "get_feature_properties", "get_feature_definition",
+                "get_thing_definition", "get_thing_policy_id", "get_policy",
+                "get_policy_entries", "get_connection", "get_connection_logs",
+                "get_connection_metrics", "list_connections", "get_messages",
+                "list_subscriptions", "get_connection_status", "poll_thing_changes",
+                "count_things", "start_subscription", "stop_subscription",
+                "discover_topics", "publish_message"]
+        effect: DENY
+        reason: "commissioning-agent is scoped to provisioning only, not general monitoring or messaging"
+      - tools: ["send_connection_command", "send_devops_piggyback",
+                "get_devops_config", "get_logging_config"]
+        effect: DENY
+        reason: "commissioning-agent has no connectivity/devops administration access"
+
+  emergency-response-agent:
+    description: >
+      Elevated-privilege role for incident response. Time-windowed: only usable during
+      an active incident window set by an on-site operator (see conditions.time_window).
+      This demonstrates the time-windowed condition type from SCOPE.md's evaluation
+      scenario #3.
+    rules:
+      - tools: ["update_thing_shadow", "publish_message"]
+        effect: ALLOW
+        conditions:
+          time_window:
+            # Both fields are local wall-clock ISO8601 times, re-evaluated on every call.
+            # If the local clock cannot be trusted (see "Degraded-clock" discussion in
+            # STRESS_TEST.md item 8), the engine MUST fail closed rather than silently
+            # allow -- see policy_engine/policy.py's clock-trust check.
+            start: "06:00:00"
+            end: "22:00:00"
+        require_confirm: true
+      - tools: ["get_thing", "get_things", "list_things", "get_connection_status",
+                "whoami", "get_messages", "list_subscriptions", "start_subscription",
+                "stop_subscription", "discover_topics", "poll_thing_changes",
+                "count_things", "get_thing_attributes", "get_thing_features",
+                "get_feature", "get_feature_properties", "get_feature_definition",
+                "get_thing_definition", "get_thing_policy_id", "get_policy",
+                "get_policy_entries", "get_connection", "get_connection_logs",
+                "get_connection_metrics", "list_connections"]
+        effect: ALLOW
+      - tools: ["delete_*", "claim_thing", "send_connection_command",
+                "send_devops_piggyback", "get_devops_config", "get_logging_config",
+                "patch_thing", "put_thing"]
+        effect: DENY
+        reason: "emergency-response-agent's elevated write access is limited to the shadow-update/message-publish tools it was granted above, not general CRUD or devops access"
+
+# Default effect when no rule matches for a given (role, tool) pair. This MUST be DENY --
+# the policy loader rejects any policy document that sets this to ALLOW, since silent
+# fail-open is explicitly disallowed by this project's design (see SCOPE.md "Fail-closed
+# by default").
+default_effect: DENY

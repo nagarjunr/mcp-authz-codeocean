@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+# Code Ocean run script for mcp-local-authz.
+#
+# Runs this project's full pytest suite (77 tests total: 66 fully self-contained --
+# policy engine, local CA/PKI, policy-document signing, hash-chained audit log,
+# FastMCP middleware, confused-deputy scenarios, token-replay scenarios -- plus 11
+# real-instance integration tests against Eclipse Ditto and Eclipse Mosquitto MQTT,
+# which are automatically skipped here since no live broker is reachable inside this
+# capsule -- see environment/Dockerfile for why, and the project's Evaluation notes /
+# STRESS_TEST.md for how those 11 were actually run for real on an NVIDIA Jetson Orin
+# Nano during this project's development).
+
+set -euo pipefail
+
+# Code Ocean's convention: uploaded/cloned code lands directly under /code (NOT in a
+# named subfolder like /code/mcp-local-authz). This script auto-detects the actual
+# project root instead of assuming a fixed nested path, so no manual file-reorganizing
+# is needed after upload -- upload the zip/tar contents as-is (pyproject.toml, ca/,
+# policy_engine/, retrofit/, tests/, examples/, code_ocean/ all directly visible),
+# and this script finds them wherever Code Ocean placed them.
+if [ -f "/code/pyproject.toml" ]; then
+  REPO_DIR="/code"
+elif [ -f "/code/mcp-local-authz/pyproject.toml" ]; then
+  REPO_DIR="/code/mcp-local-authz"
+else
+  # Fallback: search for it under /code, in case Code Ocean nested it under some
+  # other single top-level folder name (e.g. if it auto-created a folder from the
+  # zip's filename).
+  REPO_DIR="$(dirname "$(find /code -maxdepth 3 -name pyproject.toml -print -quit)")"
+fi
+
+if [ -z "${REPO_DIR:-}" ] || [ ! -f "$REPO_DIR/pyproject.toml" ]; then
+  echo "ERROR: could not locate pyproject.toml anywhere under /code -- check that the" >&2
+  echo "capsule's code was uploaded/extracted correctly." >&2
+  exit 1
+fi
+
+echo "Detected project root: $REPO_DIR"
+
+RESULTS_DIR="/results"
+mkdir -p "$RESULTS_DIR"
+
+echo "mcp-local-authz reproducibility run -- $(date -u)" | tee "$RESULTS_DIR/summary.txt"
+echo "==============================================================" | tee -a "$RESULTS_DIR/summary.txt"
+echo "" | tee -a "$RESULTS_DIR/summary.txt"
+echo "NOTE: tests/test_ditto_retrofit.py and tests/test_mqtt_retrofit.py each require" | tee -a "$RESULTS_DIR/summary.txt"
+echo "a live backend (a real Eclipse Ditto stack / Eclipse Mosquitto broker via" | tee -a "$RESULTS_DIR/summary.txt"
+echo "docker-compose), which Code Ocean's standard compute environment does not" | tee -a "$RESULTS_DIR/summary.txt"
+echo "support (no Docker-in-Docker). Both test files skip automatically via their own" | tee -a "$RESULTS_DIR/summary.txt"
+echo "DITTO_BASE_URL / MQTT_HOST environment-variable guards when no broker is" | tee -a "$RESULTS_DIR/summary.txt"
+echo "reachable. These 11 tests were run for real against live services on an NVIDIA" | tee -a "$RESULTS_DIR/summary.txt"
+echo "Jetson Orin Nano" | tee -a "$RESULTS_DIR/summary.txt"
+echo "during this project's own development; see the project's Evaluation notes for" | tee -a "$RESULTS_DIR/summary.txt"
+echo "that hardware-verified result. To reproduce them yourself: clone the repo, start" | tee -a "$RESULTS_DIR/summary.txt"
+echo "a real Ditto stack (iot-mcp-servers/eclipse-ditto) or Mosquitto broker" | tee -a "$RESULTS_DIR/summary.txt"
+echo "(iot-mcp-servers/mqtt), and run pytest with the corresponding env vars set, per" | tee -a "$RESULTS_DIR/summary.txt"
+echo "each test file's own module docstring." | tee -a "$RESULTS_DIR/summary.txt"
+
+cd "$REPO_DIR"
+
+echo "" | tee -a "$RESULTS_DIR/summary.txt"
+echo "Installing dependencies (uv sync)..." | tee -a "$RESULTS_DIR/summary.txt"
+uv sync --frozen --no-cache 2>&1 | tee "$RESULTS_DIR/uv_sync.log"
+
+echo "" | tee -a "$RESULTS_DIR/summary.txt"
+echo "Running test suite (uv run pytest -v)..." | tee -a "$RESULTS_DIR/summary.txt"
+if uv run pytest -v 2>&1 | tee "$RESULTS_DIR/pytest.log"; then
+  echo "mcp-local-authz: PASS (see pytest.log for full per-test results and skip reasons)" | tee -a "$RESULTS_DIR/summary.txt"
+else
+  echo "mcp-local-authz: FAIL (see pytest.log)" | tee -a "$RESULTS_DIR/summary.txt"
+fi
+
+echo "" | tee -a "$RESULTS_DIR/summary.txt"
+echo "Done. Full log in $RESULTS_DIR/pytest.log" | tee -a "$RESULTS_DIR/summary.txt"
