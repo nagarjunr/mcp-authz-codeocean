@@ -174,10 +174,12 @@ def _write_file_atomic(path: str | Path, data: bytes, mode: int) -> None:
     fd = os.open(tmp, flags, 0o600)
     try:
         with os.fdopen(fd, "wb") as f:
-            os.fchmod(f.fileno(), mode)
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
+            # Apply the final mode only after the content is complete, so a broader mode never
+            # exposes a half-written file (the temp file starts out owner-only, 0600).
+            os.fchmod(f.fileno(), mode)
         os.replace(tmp, path)
     except BaseException:
         try:
@@ -193,8 +195,13 @@ def write_private_file(path: str | Path, data: bytes) -> None:
 
 
 def write_public_file(path: str | Path, data: bytes) -> None:
-    """Write non-secret material that must not be tampered with (certificates), mode 0644,
-    safely and atomically (see _write_file_atomic)."""
+    """Write genuinely non-secret material that must not be tampered with, mode 0644, safely
+    and atomically (see _write_file_atomic).
+
+    Intended for the root CA certificate only. Do NOT use it for agent (leaf) certificates: the
+    middleware accepts those as bearer credentials, so they must stay owner-only (use
+    write_private_file).
+    """
     _write_file_atomic(path, data, 0o644)
 
 
