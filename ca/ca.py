@@ -33,6 +33,8 @@ from __future__ import annotations
 
 import datetime
 import os
+import secrets
+import stat
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -150,15 +152,48 @@ def generate_root_ca(site_id: str) -> RootCA:
 
 
 def write_private_file(path: str | Path, data: bytes) -> None:
-    """Write secret material so it is owner-only (0600) from the moment the file exists.
+    """Write secret material so it is owner-only (0600) from the moment it exists, safely.
 
-    Uses os.open with an explicit mode instead of write-then-chmod, so there is no window in
-    which the file is readable by other users. An existing file is tightened to 0600 as well.
+    The data goes to a fresh temp file in the same directory, created exclusively
+    (O_EXCL, O_NOFOLLOW, mode 0600), and is then moved into place with os.replace(). This avoids
+    the weaknesses of open(O_TRUNC) on the final path: a symlink or hard link planted at `path`
+    is replaced rather than followed or truncated, and there is no window in which the key is
+    readable by other users or half-written.
     """
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "wb") as f:
-        os.fchmod(f.fileno(), 0o600)
-        f.write(data)
+    path = Path(path)
+    tmp = path.with_name(f".{path.name}.{secrets.token_hex(4)}.tmp")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(tmp, flags, 0o600)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(data)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except FileNotFoundError:
+            pass
+        raise
+
+
+def ensure_private_dir(path: str | Path) -> Path:
+    """Create `path` (if needed) as an owner-only (0700) directory and return it.
+
+    An existing directory must be owned by the current user; if it is accessible to group or
+    others it is tightened to 0700. Use this only for directories that hold key material.
+    """
+    path = Path(path)
+    path.mkdir(mode=0o700, parents=True, exist_ok=True)
+    st = path.stat()
+    if not stat.S_ISDIR(st.st_mode):
+        raise CertificateError(f"{path} exists and is not a directory")
+    if hasattr(os, "geteuid") and st.st_uid != os.geteuid():
+        raise CertificateError(f"{path} is not owned by the current user; refusing to store keys there")
+    if stat.S_IMODE(st.st_mode) & 0o077:
+        os.chmod(path, 0o700)
+    return path
 
 
 def save_root_ca(ca: RootCA, directory: str | Path) -> None:
@@ -168,7 +203,7 @@ def save_root_ca(ca: RootCA, directory: str | Path) -> None:
     docstring for why TPM sealing is named as future work rather than implemented here.
     """
     directory = Path(directory)
-    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    directory = ensure_private_dir(directory)
 
     cert_path = directory / "root_ca.crt.pem"
     key_path = directory / "root_ca.key.pem"
