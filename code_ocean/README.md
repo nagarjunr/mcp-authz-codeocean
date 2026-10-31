@@ -41,24 +41,24 @@ section (Section VI) for that hardware-verified result.
 ## To reproduce the full 77-test suite yourself (outside Code Ocean)
 
 ```bash
-git clone https://github.com/nagarjunr/mcp-local-authz-code.git
+git clone https://github.com/nagarjunr/mcp-authz-codeocean.git
 git clone https://github.com/nagarjunr/iot-mcp-servers.git   # for the real servers
 
 # Eclipse Ditto:
 cd iot-mcp-servers/eclipse-ditto && docker compose up -d
-cd ../../mcp-local-authz-code
+cd ../../mcp-authz-codeocean
 DITTO_BASE_URL=http://localhost:8080 DITTO_USERNAME=ditto DITTO_PASSWORD=ditto \
   uv run pytest tests/test_ditto_retrofit.py -v
 
 # Eclipse Mosquitto (mqtt):
 cd ../iot-mcp-servers/mqtt && docker compose up -d mosquitto
-cd ../../mcp-local-authz-code
+cd ../../mcp-authz-codeocean
 MQTT_HOST=localhost MQTT_PORT=1883 MQTT_USERNAME=mqtt MQTT_PASSWORD=mqtt \
   uv run pytest tests/test_mqtt_retrofit.py -v
 ```
 
 ## A note on how this repo relates to its source repo
 
-This repo (`mcp-local-authz-code`) is a code-only public mirror of a private research
+This repo (`mcp-authz-codeocean`) is a code-only public mirror of a private research
 repository. It exists solely because Code Ocean's Git-import feature requires a
 public repository. It contains only the implementation code and tests -- see the root `README.md`.

@@ -1,4 +1,4 @@
-# mcp-local-authz-code
+# mcp-authz-codeocean
 
 **Code Ocean reproducibility mirror.** This is a public, code-only companion repo for
 the private research repository `mcp-local-authz`, created solely because Code
