@@ -4,7 +4,7 @@ import stat
 
 import pytest
 
-from ca.ca import CertificateError, ensure_private_dir, generate_root_ca, save_root_ca, write_private_file
+from ca.ca import CertificateError, ensure_private_dir, generate_root_ca, save_root_ca, write_private_file, write_public_file
 
 pytestmark = pytest.mark.skipif(not hasattr(os, "fchmod"), reason="POSIX permissions required")
 
@@ -121,3 +121,33 @@ def test_refuses_to_store_keys_without_posix_hardening(monkeypatch, tmp_path):
         write_private_file(tmp_path / "k.pem", b"x")
     with pytest.raises(CertificateError):
         ensure_private_dir(tmp_path / "d")
+
+
+def test_write_public_file_is_atomic_and_world_readable_regardless_of_umask(tmp_path):
+    old_umask = os.umask(0o077)
+    try:
+        f = tmp_path / "root_ca.crt.pem"
+        write_public_file(f, b"cert")
+    finally:
+        os.umask(old_umask)
+    assert f.read_bytes() == b"cert"
+    assert _mode(f) == 0o644
+    assert [p.name for p in tmp_path.iterdir()] == ["root_ca.crt.pem"]
+
+
+def test_write_public_file_replaces_a_planted_symlink(tmp_path):
+    victim = tmp_path / "victim.txt"
+    victim.write_text("keep me")
+    link = tmp_path / "root_ca.crt.pem"
+    link.symlink_to(victim)
+    write_public_file(link, b"cert")
+    assert victim.read_text() == "keep me"
+    assert not link.is_symlink()
+    assert link.read_bytes() == b"cert"
+
+
+def test_save_root_ca_certificate_is_public_and_key_is_private(tmp_path):
+    ca = generate_root_ca(site_id="test-site")
+    save_root_ca(ca, tmp_path / "ca")
+    assert _mode(tmp_path / "ca" / "root_ca.crt.pem") == 0o644
+    assert _mode(tmp_path / "ca" / "root_ca.key.pem") == 0o600
