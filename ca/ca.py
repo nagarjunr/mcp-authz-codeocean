@@ -181,18 +181,38 @@ def write_private_file(path: str | Path, data: bytes) -> None:
 def ensure_private_dir(path: str | Path) -> Path:
     """Create `path` (if needed) as an owner-only (0700) directory and return it.
 
-    An existing directory must be owned by the current user; if it is accessible to group or
-    others it is tightened to 0700. Use this only for directories that hold key material.
+    Missing parent directories are created 0700 as well. The final component must be a real
+    directory (a symlink is refused, not followed), owned by the current user; if it is
+    accessible to group or others it is tightened to 0700. The checks and the chmod run on an
+    open descriptor, so they cannot be raced. Use this only for directories that hold key
+    material.
     """
     path = Path(path)
-    path.mkdir(mode=0o700, parents=True, exist_ok=True)
-    st = path.stat()
-    if not stat.S_ISDIR(st.st_mode):
-        raise CertificateError(f"{path} exists and is not a directory")
-    if hasattr(os, "geteuid") and st.st_uid != os.geteuid():
-        raise CertificateError(f"{path} is not owned by the current user; refusing to store keys there")
-    if stat.S_IMODE(st.st_mode) & 0o077:
-        os.chmod(path, 0o700)
+    missing = []
+    probe = path
+    while not os.path.lexists(probe) and probe != probe.parent:
+        missing.append(probe)
+        probe = probe.parent
+    for d in reversed(missing):
+        try:
+            os.mkdir(d, 0o700)
+        except FileExistsError:
+            pass
+    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    try:
+        dir_fd = os.open(path, flags)
+    except OSError as e:
+        raise CertificateError(f"{path} is not a usable private directory (symlink or not a directory): {e}") from e
+    try:
+        st = os.fstat(dir_fd)
+        if not stat.S_ISDIR(st.st_mode):
+            raise CertificateError(f"{path} is not a directory")
+        if hasattr(os, "geteuid") and st.st_uid != os.geteuid():
+            raise CertificateError(f"{path} is not owned by the current user; refusing to store keys there")
+        if stat.S_IMODE(st.st_mode) & 0o077:
+            os.fchmod(dir_fd, 0o700)
+    finally:
+        os.close(dir_fd)
     return path
 
 
