@@ -160,14 +160,12 @@ def _require_posix_hardening() -> None:
         )
 
 
-def write_private_file(path: str | Path, data: bytes) -> None:
-    """Write secret material so it is owner-only (0600) from the moment it exists, safely.
+def _write_file_atomic(path: str | Path, data: bytes, mode: int) -> None:
+    """Write `data` to a fresh temp file (O_EXCL, O_NOFOLLOW) and move it into place atomically.
 
-    The data goes to a fresh temp file in the same directory, created exclusively
-    (O_EXCL, O_NOFOLLOW, mode 0600), and is then moved into place with os.replace(). This avoids
-    the weaknesses of open(O_TRUNC) on the final path: a symlink or hard link planted at `path`
-    is replaced rather than followed or truncated, and there is no window in which the key is
-    readable by other users or half-written.
+    A symlink or hard link planted at `path` is replaced rather than followed or truncated,
+    and a crash cannot leave a half-written file at `path`. The mode is set explicitly, so it
+    does not depend on the umask.
     """
     _require_posix_hardening()
     path = Path(path)
@@ -176,6 +174,7 @@ def write_private_file(path: str | Path, data: bytes) -> None:
     fd = os.open(tmp, flags, 0o600)
     try:
         with os.fdopen(fd, "wb") as f:
+            os.fchmod(f.fileno(), mode)
             f.write(data)
             f.flush()
             os.fsync(f.fileno())
@@ -186,6 +185,17 @@ def write_private_file(path: str | Path, data: bytes) -> None:
         except FileNotFoundError:
             pass
         raise
+
+
+def write_private_file(path: str | Path, data: bytes) -> None:
+    """Write secret material owner-only (0600), safely and atomically (see _write_file_atomic)."""
+    _write_file_atomic(path, data, 0o600)
+
+
+def write_public_file(path: str | Path, data: bytes) -> None:
+    """Write non-secret material that must not be tampered with (certificates), mode 0644,
+    safely and atomically (see _write_file_atomic)."""
+    _write_file_atomic(path, data, 0o644)
 
 
 def ensure_private_dir(path: str | Path) -> Path:
@@ -241,7 +251,7 @@ def save_root_ca(ca: RootCA, directory: str | Path) -> None:
     cert_path = directory / "root_ca.crt.pem"
     key_path = directory / "root_ca.key.pem"
 
-    cert_path.write_bytes(ca.cert_pem)
+    write_public_file(cert_path, ca.cert_pem)
 
     key_bytes = ca.private_key.private_bytes(
         encoding=serialization.Encoding.PEM,
