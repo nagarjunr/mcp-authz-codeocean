@@ -42,3 +42,11 @@ Expected: `66 passed, 11 skipped` without a live Ditto/MQTT broker running.
 
 See `code_ocean/README.md` for the exact reproducibility-capsule setup, scope, and
 reproduction steps.
+
+## Known limitations
+
+This is a research prototype. These gaps are known and listed here so nobody has to find them the hard way:
+
+- **Agent identity is a bearer credential.** The middleware checks that an agent's certificate chains to the local root CA, but it does not require proof that the caller holds the matching private key. Anyone who obtains the certificate blob sent in the request metadata can present it. Short certificate lifetimes limit the window. Per-call signing or transport-level mTLS would close it; neither is implemented.
+- **The local clock is assumed to be trustworthy.** The middleware passes `clock_is_trusted=True` to the policy engine, so time-windowed policy conditions and certificate validity checks rely on the host clock. The engine has a degraded-clock path, but nothing feeds it a real clock-health signal yet.
+- **Key protection is filesystem-level only.** The root CA private key is created owner-only (0600) in an owner-only directory. There is no hardware-backed (TPM) key protection.
